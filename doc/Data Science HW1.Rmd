@@ -1,0 +1,293 @@
+---
+title: 'Happy Moments: A Statistical Analysis'
+author: "Leslie"
+date: "2024-01-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(glmnet)
+```
+
+```{r, include =FALSE}
+clean = read.csv("cleaned_hm.csv")
+demo = read.csv("demographic.csv")
+family = read.csv("family-dict.csv")
+```
+## Motivation
+Does the type of happiness change as we age? Or are the types of happiness differ by demographic. This projects aims to find the relationship between happiness and nationality, marital status, and parenthood.
+
+## Data Exploration
+Checking the raw data to understand what they are.
+```{r}
+head(clean)
+head(demo)
+head(family)
+```
+
+Merging the demographic info with cleaned data set, removing duplicates and NAs
+```{r}
+merged_df = merge(clean, demo, on = "wid", all = T)
+duplicate_rows = duplicated(merged_df)
+unique_df = merged_df[!duplicate_rows, ]
+complete_rows = complete.cases(unique_df)
+df = unique_df[complete_rows, ]
+```
+
+```{r}
+duplicate_rows = duplicated(demo)
+demo = demo[!duplicate_rows, ]
+complete_rows = complete.cases(demo)
+demo = demo[complete_rows, ]
+```
+
+
+Adding the total count to the cleaned data
+```{r}
+wid_counts = table(df$wid)
+df$entries = wid_counts[match(df$wid, names(wid_counts))]
+df$entries = as.integer(df$entries)
+```
+
+## Creating Variables
+
+Getting the count for the total count of memories by predicted category, duration, but also the combination of both
+```{r}
+result_sum = df %>%
+  group_by(wid) %>%
+  summarize(occurrence = n()) %>%
+  pivot_wider(names_from = "wid", values_from = "occurrence", values_fill = 0)
+result_sum = t(result_sum)
+result_sum = data.frame(result_sum)
+colnames(result_sum) = "count_total"
+result_sum$wid = unique(df$wid)
+
+
+result_detailed = df %>%
+  group_by(reflection_period, predicted_category, wid) %>%
+  summarize(occurrence = n()) %>%
+  pivot_wider(names_from = c("reflection_period", "predicted_category"), values_from = "occurrence", values_fill = 0)
+
+result_time = df %>%
+  group_by(reflection_period, wid) %>%
+  summarize(occurrence = n()) %>%
+  pivot_wider(names_from = "reflection_period", values_from = "occurrence", values_fill = 0)
+
+result_df = df %>%
+  group_by(predicted_category, wid) %>%
+  summarize(occurrence = n()) %>%
+  pivot_wider(names_from = "predicted_category", values_from = "occurrence", values_fill = 0)
+```
+Getting the explainatory variables by worker ID
+
+```{r}
+dep = df %>%
+  select(wid, age, marital, country, parenthood)
+
+unique_marital = unique(df$marital)
+unique_parenthood = unique(df$parenthood)
+unique_country = unique(df$country)
+for (marital_val in unique_marital) {
+  dep = dep %>%
+    mutate(!!paste0("marital_", marital_val, "_binary") := as.integer(marital == marital_val))
+}
+
+for (parenthood_val in unique_parenthood) {
+  dep = dep %>%
+    mutate(!!paste0("parenthood_", parenthood_val, "_binary") := as.integer(parenthood == parenthood_val))
+}
+
+for (country_val in unique_country) {
+  dep = dep %>%
+    mutate(!!paste0("country_", country_val, "_binary") := as.integer(country == country_val))
+}
+```
+
+Remove duplicates and NAs
+```{r}
+duplicate_rows = duplicated(dep)
+dep = dep[!duplicate_rows, ]
+complete_rows = complete.cases(dep)
+dep = dep[complete_rows, ]
+```
+Making sure the dataframes have the same number of rows
+```{r}
+stopifnot(length(dep$wid) == length(result_sum$wid))
+```
+
+
+## Data Visualization
+Checking the country information. There are quite a few countries but it is dominated by USA and IND. As a result, we group every other country together into "Other" So we do not create variable which only applies to a few data points. Obviously this incorporates a vast number of nations and might include biases that are not accounted for in the scope of the project.
+```{r}
+country_counts = table(dep$country)
+country_counts
+
+country_counts_processed = country_counts
+country_counts_processed[!(names(country_counts_processed) %in% c("USA", "IND"))] <- 0
+country_counts_processed = c(country_counts_processed, Other = sum(country_counts[!(names(country_counts) %in% c("USA", "IND"))]))
+country_counts_processed = country_counts_processed[country_counts_processed != 0]
+pie(country_counts_processed, labels = paste(names(country_counts_processed), ": ", country_counts_processed), main = "Pie Chart of Country Counts", col = rainbow(length(country_counts_processed)))
+
+#pie(country_counts_processed, main = "Pie Chart of Country Counts", col = rainbow(length(country_counts_processed)))
+```
+
+Changing our data to add "other" for country
+```{r}
+dep = dep %>%
+  mutate(country_Other_binary = ifelse(country_USA_binary == 0 & country_IND_binary == 0, 1, 0))
+```
+
+
+Similarly, we can observe that the marital status that is not single or married is quite a bit smaller than the others. Although not to as extreme a degree. Still, we group widowed, divorced, and separated together
+```{r}
+fam =  table(dep$marital)
+pie(fam, labels = paste(names(fam), ": ", fam), main = "Pie Chart of Marital Status", col = rainbow(length(fam)))
+```
+
+We name the new variable "Lost Partner"
+```{r}
+dep = dep %>%
+  mutate(marital_lostpartner_binary = ifelse(marital_divorced_binary == 1 | marital_separated_binary == 1 | marital_widowed_binary == 1, 1, 0))
+```
+
+
+In contrast, parenthood seems to be fine as is, so we keep the variables as is
+```{r}
+parent = table(dep$parenthood)
+
+pie(parent, labels = paste(names(parent), ": ", parent), main = "Pie Chart of Parenthood", col = rainbow(length(parent)))
+```
+Now we take a look at the interpretations of the response variable. Starting with how many moments each employee reported. It seems there's a strong trend downward as wid increases, but this should not be an issue as it is not part of the regression. The vast amount of people reported 10 or less instances of happiness.
+```{r}
+plot(result_sum$wid, result_sum$count, main = "number of reports by worker ID", xlab = "Worker ID", ylab = "Count")
+boxplot(result_sum$count, main = "Boxplot of result_sum$count", ylab = "Count")
+
+```
+
+We can also take a look at the distribution of types of happiness. It seems that achievement and affection are the major players, with bonding and enjoy the moment also significant. If we are curious, we can attempt to regress on specific types of happiness, at least the major ones should have enough data
+```{r}
+happy = table(df$predicted_category)
+pie(happy, labels = paste(names(happy), ": ", happy), main = "Pie Chart of Types of Happiness", col = rainbow(length(happy)))
+```
+
+The reflection time seems very even. A side by side comparison shows that there isn't a ton of difference of the types of happiness, regardless of which reflection period was used. 
+```{r}
+time = table(df$reflection_period)
+pie(time, labels = paste(names(time), ": ", time), main = "Pie Chart of Reflection Period", col = rainbow(length(time)))
+ggplot(df, aes(x = reflection_period, fill = predicted_category)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Bar Plot of Count of Predicted Categories by Reflective Period",
+       x = "Reflection Period",
+       y = "Count") +
+  scale_fill_brewer(palette = "Set3") 
+
+df_percent = df %>%
+  group_by(reflection_period, predicted_category) %>%
+  summarize(percent = n() / nrow(df) * 100)
+
+
+ggplot(df_percent, aes(x = reflection_period, y = percent, fill = predicted_category)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Bar Plot of Percentage of Predicted Categories by Reflective Period",
+       x = "Reflection Period",
+       y = "Percentage") +
+  scale_fill_brewer(palette = "Set3")
+```
+
+## Regression and Interpretation
+
+Now we do some regression. Lasso regression is used to perform feature selection. It seems that losing a partner, being a parent, and being from the US had little impact to happiness. The US part is perhaps not surprising since it is by far the most common nationality. On the other hand, it seems being from India has a strong positive relationship with hapiness, or at least hapiness reported. Single people and married people seem to be happier than those that lost their partner in some way, which is perhaps not surprising. Lastly, as people get older, they seem to be happier, which is good to hear, maybe. Another way to interpret these results, however, could be how people respond to additional projects outside their scope of work. Maybe people are more interested in such a study as they age. It might not be wise to assume that people who responded the most are the happiest. To better understand that, perhaps a rating of their past 24 hours / 3 months can be used in conjunction with the current sentences to paint a more complete picture. 
+```{r}
+X = as.matrix(cbind(as.numeric(dep$age), dep$marital_married_binary, dep$marital_single_binary, dep$marital_lostpartner_binary, dep$parenthood_y_binary, dep$country_USA_binary, dep$country_IND_binary, dep$country_Other_binary))
+
+y = result_sum$count
+
+complete_rows <- complete.cases(X, y)
+X <- X[complete_rows, ]
+y <- y[complete_rows]
+
+lambda_values = 10^seq(10, -2, length = 100)
+
+lasso_cv = cv.glmnet(X, y, alpha = 1, lambda = lambda_values)
+
+plot(lasso_cv)
+
+optimal_lambda = lasso_cv$lambda.min
+
+
+optimal_coefficients = coef(lasso_cv, s = optimal_lambda)
+
+print(optimal_coefficients)
+```
+Lastly, we specify the types of happiness and see if if there are additional pattern not observed with the full data
+```{r}
+happy_type = unique(df$predicted_category)
+output = data.frame(matrix(nrow = length(happy_type), ncol = 10))
+colnames(output) <- c("Type of Happiness", "Intercept", "Age", "Married", "Single", "Lost Spouse", "Children", "USA", "IND", "Other")
+for (i in 1:length(happy_type)){
+  name = happy_type[i]
+  output[i,1] = name
+  X = as.matrix(cbind(as.numeric(dep$age), dep$marital_married_binary, dep$marital_single_binary, dep$marital_lostpartner_binary, dep$parenthood_y_binary, dep$country_USA_binary, dep$country_IND_binary, dep$country_Other_binary))
+  ob = result_df[[name]]
+  complete_rows <- complete.cases(X, ob)
+  X = X[complete_rows, ]
+  ob = ob[complete_rows]
+  lasso_cv = cv.glmnet(X, ob, alpha = 1, lambda = lambda_values)
+  optimal_lambda = lasso_cv$lambda.min
+  optimal_coefficients = coef(lasso_cv, s = optimal_lambda)
+  for (j in 1 : length(optimal_coefficients)){
+    output[i, j+1] = optimal_coefficients[j]
+  }
+}
+
+```
+It seems that when broken down, each predictor's effect on happiness is generally lower. Some happiness metrics that are smaller, such as exercise, has almost no bearing with any of our predictors. We see a greater pull downwards for achievement and affection for those that lost their spouse, while the opposite effect is in place for those from IND. Elsewhere, children is generally a detractor of happiness, but it is positively correlated with affection. Single people cited achievement as their most common happiness, while married people are usually only significant when mentioning leisure. Age's effect is still there, but it is so small that I am surprised that it was not set to 0 in some cases.
+
+```{r}
+output
+graph = t(output)
+custom_labels = c("", "Intercept", "Age", "Married", "Single", "Lost", "Children", "USA", "IND", "Other")
+#matplot(graph, type = "l", lty = 1, col = 1:length(happy_type), xlab = "Predictor", ylab = "Value",
+#        main = "Plot of Each Row for Selected Columns")
+matplot(graph, type = "l", lty = 1, col = 1:nrow(graph), xlab = "Variable", ylab = "Coefficient",
+        main = "Plot of Each Row for Selected Columns", xaxt = "n")
+axis(1, at = 1:length(custom_labels), labels = custom_labels, cex.axis = 0.8)
+legend("top", legend = happy_type, col = 1:length(happy_type), lty = 1, cex = 0.5)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
