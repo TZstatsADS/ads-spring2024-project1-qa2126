@@ -9,12 +9,16 @@ This is the first and only *individual* (as opposed to *team*) this semester.
 
 Term: Fall 2023
 
-+ Projec title: Lorem ipsum dolor sit amet
-+ This project is conducted by [your name]
++ Projec title: Happy Moments: A Statistical Analysis
++ This project is conducted by Leslie An
 
-+ Project summary: [a short summary] Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
++ Project summary: This project takes a look at the responses of each participant of the happy project, and explores the relationship between demographic information provided and the resulting happiness messages. The project explores, visualizes, and analyzed the data and presents a conclusion at the end. Lasso regression was used to select the most important explanatory variables.
++ To run the notebook, make sure the data is in the same folder as the working directory. Alternatively edit the filepath to where the csv file is.
++ The notebook uses the following packages, run this line in the R console if you do not have the packages installed: install.packages(c("ggplot2", "glmnet", "tidyverse", "dplyr"))
 
-Following [suggestions](http://nicercode.github.io/blog/2013-04-05-projects/) by [RICH FITZJOHN](http://nicercode.github.io/about/#Team) (@richfitz). This folder is orgarnized as follows.
+  
+
+
 
 ```
 proj/
